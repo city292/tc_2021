@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from model.ops import init_network
+from .ops import init_network
 from .CCNet import RCCAModule
 import torch.nn.functional as F
 
@@ -46,14 +46,14 @@ class InitialBlock(nn.Module):
         # the extension branch
         self.main_branch = nn.Conv2d(
             in_channels,
-            out_channels - 3,
+            out_channels - in_channels,
             kernel_size=3,
             stride=2,
             padding=1,
             bias=bias)
 
         # Extension branch
-        self.ext_branch = nn.MaxPool2d(3, stride=2, padding=1)
+        self.ext_branch = nn.MaxPool2d(in_channels, stride=2, padding=1)
 
         # Initialize batch normalization to be used after concatenation
         self.batch_norm = nn.BatchNorm2d(out_channels)
@@ -479,7 +479,7 @@ class ECCNet(nn.Module):
     def __init__(self, num_classes, encoder_relu=False, decoder_relu=True, recurrence=2):
         super().__init__()
 
-        self.initial_block = InitialBlock(3, 16, relu=encoder_relu)
+        self.initial_block = InitialBlock(4, 16, relu=encoder_relu)
         self.recurrence = recurrence
         # Stage 1 - Encoder
         self.downsample1_0 = DownsamplingBottleneck(
@@ -598,8 +598,8 @@ class ECCNet(nn.Module):
         return [x, x_dsn]
 
 
-def get_eccnet(gpu_ids=1, ema=False):
-    net = ECCNet(num_classes=1, recurrence=2)
+def get_eccnet(gpu_ids=1, ema=False, num_classes=1):
+    net = ECCNet(num_classes=num_classes, recurrence=2)
     if ema:
         for param in net.parameters():
             param.detach_()

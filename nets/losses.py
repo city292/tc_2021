@@ -5,6 +5,40 @@ import numpy as np
 import torch.nn as nn
 
 
+class IOUMetric:
+    """
+    Class to calculate mean-iou using fast_hist method
+    """
+
+    def __init__(self, num_classes):
+        self.num_classes = num_classes
+        self.hist = np.zeros((num_classes, num_classes))
+
+    def _fast_hist(self, label_pred, label_true):
+        mask = (label_true >= 0) & (label_true < self.num_classes)
+        hist = np.bincount(
+            self.num_classes * label_true[mask].astype(int) + label_pred[mask], minlength=self.num_classes ** 2).reshape(self.num_classes, self.num_classes)
+        return hist
+
+    def add_batch(self, predictions, gts):
+        for lp, lt in zip(predictions, gts):
+            self.hist += self._fast_hist(lp.flatten(), lt.flatten())
+
+    def evaluate(self):
+        acc = np.diag(self.hist).sum() / self.hist.sum()
+        acc_cls = np.diag(self.hist) / self.hist.sum(axis=1)
+        acc_cls = np.nanmean(acc_cls)
+        iu = np.diag(self.hist) / (self.hist.sum(axis=1) + self.hist.sum(axis=0) - np.diag(self.hist))
+        mean_iu = np.nanmean(iu)
+        freq = self.hist.sum(axis=1) / self.hist.sum()
+        fwavacc = (freq[freq > 0] * iu[freq > 0]).sum()
+        self.reset()
+        return acc, acc_cls, iu, mean_iu, fwavacc
+
+    def reset(self):
+        self.hist = np.zeros((self.num_classes, self.num_classes))
+
+
 class LossWrapper(nn.Module):
     def __init__(self, name=None):
         super(LossWrapper, self).__init__()
@@ -13,10 +47,14 @@ class LossWrapper(nn.Module):
             self.lossF = FocalLoss()
         elif name == 'OHEMFocalLoss':
             self.lossF = OHEMFocalLoss()
+        elif name == 'CrossEntropy':
+            self.lossF = nn.CrossEntropyLoss()
         elif name == 'BCE':
             self.lossF = nn.BCEWithLogitsLoss()
         elif name == 'DiceLoss':
             self.lossF = DiceLoss()
+        elif name == 'MultiClassDiceLoss':
+            self.lossF = MultiClassDiceLoss()
         elif name == 'BoundaryLoss':
             self.lossF = BoundaryLoss()
 
@@ -36,25 +74,19 @@ class LossWrapper(nn.Module):
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2, weight=None, ignore_index=None):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.weight = weight
-        self.ignore_index = ignore_index
-        self.bce_fn = nn.BCEWithLogitsLoss(weight=self.weight)
 
-    def forward(self, preds, labels):
-        if self.ignore_index is not None:
-            mask = labels != self.ignore_index
-            labels = labels[mask]
-            preds = preds[mask]
-        preds = preds.contiguous().view(-1)
-        labels = labels.contiguous().view(-1)
-        logpt = -self.bce_fn(preds, labels)
-        pt = torch.exp(logpt)
-        loss = -((1 - pt) ** self.gamma) * self.alpha * logpt
-        return loss
+    def __init__(self, gamma=0, alpha=1):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.ce = nn.CrossEntropyLoss()
+        self.alpha = alpha
+
+    def forward(self, input, target):
+        logp = self.ce(input, target)
+        p = torch.exp(-logp)
+        loss = (1 - p) ** self.gamma * logp
+        loss = self.alpha * loss
+        return loss.mean()
 
 
 def diceCoeff(pred, gt, smooth=1e-5, activation='sigmoid'):
@@ -122,6 +154,61 @@ class DiceLoss(nn.Module):
         return 1 - diceCoeffv2(y_pr, y_gt, activation=self.activation)
 
 
+class BinaryDiceLoss(nn.Module):
+    def __init__(self):
+        super(BinaryDiceLoss, self).__init__()
+
+    def forward(self, input, targets):
+        # 获取每个批次的大小 N
+        N = targets.size()[0]
+        # 平滑变量
+        smooth = 1
+        # 将宽高 reshape 到同一纬度
+        input_flat = input.view(N, -1)
+        targets_flat = targets.view(N, -1)
+
+        # 计算交集
+        intersection = input_flat * targets_flat
+        N_dice_eff = (2 * intersection.sum(1) + smooth) / (input_flat.sum(1) + targets_flat.sum(1) + smooth)
+        # 计算一个批次中平均每张图的损失
+        loss = 1 - N_dice_eff.sum() / N
+        return loss
+
+
+class MultiClassDiceLoss(nn.Module):
+    def __init__(self, weight=None, ignore_index=None, **kwargs):
+        super(MultiClassDiceLoss, self).__init__()
+        self.weight = weight
+        self.ignore_index = ignore_index
+        self.kwargs = kwargs
+
+    def forward(self, input, target):
+        """
+            input tesor of shape = (N, C, H, W)
+            target tensor of shape = (N, H, W)
+        """
+        # 先将 target 进行 one-hot 处理，转换为 (N, C, H, W)
+        nclass = input.shape[1]
+        target = one_hot(target.long(), nclass)
+
+        assert input.shape == target.shape, "predict & target shape do not match"
+
+        binaryDiceLoss = BinaryDiceLoss()
+        total_loss = 0
+
+        # 归一化输出
+        logits = F.softmax(input, dim=1)
+        C = target.shape[1]
+
+        # 遍历 channel，得到每个类别的二分类 DiceLoss
+        for i in range(C):
+            dice_loss = binaryDiceLoss(logits[:, i], target[:, i])
+            total_loss += dice_loss
+
+        # 每个类别的平均 dice_loss
+        return total_loss / C
+
+
 class OHEMFocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2, weight=None, ignore_index=255, OHEM_percent=0.3):
         super(OHEMFocalLoss, self).__init__()
@@ -176,44 +263,6 @@ def lovasz_grad(gt_sorted):
     if p > 1:  # cover 1-pixel case
         jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
     return jaccard
-
-
-def iou_pytorch(outputs: torch.Tensor, labels: torch.Tensor):
-    # You can comment out this line if you are passing tensors of equal shape
-    # But if you are passing output from UNet or something it will most probably
-    # be with the BATCH x 1 x H x W shape
-    SMOOTH = 1e-6
-    # outputs = outputs.squeeze(1)  # BATCH x 1 x H x W => BATCH x H x W
-    outputs = torch.round(Sigmoid()(outputs)).int()
-
-    labels = labels.int()
-    # print(outputs.sum(), labels.sum())
-    intersection = (outputs & labels).float().sum()  # Will be zero if Truth=0 or Prediction=0
-
-    union = (outputs | labels).float().sum()  # Will be zero if both are 0
-    # print(intersection, union)
-    iou = (intersection + SMOOTH) / (union + SMOOTH)  # We smooth our devision to avoid 0/0
-
-    # thresholded = torch.clamp(20 * (iou - 0.5), 0, 10).ceil() / 10  # This is equal to comparing with thresolds
-    # return thresholded.mean()
-    return iou  # Or thresholded.mean() if you are interested in average across the batch
-
-
-def IoU(inputs, targets, smooth=1):
-    # 把inputs，targets转成cpu再detach，这样就不会占用GPU资源。
-    inputs = inputs.cpu().detach()
-    targets = targets.cpu().detach()
-    # 要对input进行threshold，让他变成（0，1）组成的。
-    inputs = torch.round(inputs).view(-1)
-    targets = torch.round(targets).view(-1)
-    # intersection is equivalent to True Positive count
-    # union is the mutually inclusive area of all labels & predictions
-    intersection = (inputs * targets).sum()
-    total = (inputs + targets).sum()
-    union = total - intersection
-
-    IoU = (intersection + smooth) / (union + smooth)
-    return IoU.numpy()
 
 
 def one_hot(label, n_classes, requires_grad=True):
