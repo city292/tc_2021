@@ -147,7 +147,7 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes, criterion, recurrence):
         self.inplanes = 128
         super(ResNet, self).__init__()
-        self.conv1 = conv3x3(3, 64, stride=2)
+        self.conv1 = conv3x3(4, 64, stride=2)
         self.bn1 = BatchNorm2d(64)
         self.relu1 = nn.ReLU(inplace=False)
         self.conv2 = conv3x3(64, 64)
@@ -221,8 +221,8 @@ class ResNet(nn.Module):
             return outs
 
 
-def get_CCNET_Model(gpu_ids=1, ema=False):
-    net = ResNet(Bottleneck, layers=[2, 2, 2, 2], num_classes=1, criterion=None, recurrence=2)
+def get_CCNET_Model(gpu_ids=1, ema=False, num_classes=10):
+    net = ResNet(Bottleneck, layers=[2, 2, 2, 2], num_classes=10, criterion=None, recurrence=2)
     if ema:
         for param in net.parameters():
             param.detach_()

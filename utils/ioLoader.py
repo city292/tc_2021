@@ -7,13 +7,11 @@ import torchvision
 from PIL import Image
 from cv2 import imread
 from torch.utils.data import Dataset
-from osgeo import ogr, osr, gdal
 
 
 def readTiff(filename):
-    tif1 = gdal.Open(filename, gdal.GA_Update)
-    tif_num_1 = tif1.ReadAsArray()
-    return tif_num_1
+
+    return np.transpose(np.array(Image.open(filename), np.int), [2, 0, 1])
 
 
 def readlabel(labelname):
@@ -34,17 +32,13 @@ class ListDataSet(Dataset):
 
     def __getitem__(self, index):
         image = readTiff(self.files[index][0])
+        image = image + np.random.randint(-5, 5, image.shape)
+        image = np.clip(image, 0, 255)
         xsize = image.size
         label = readlabel(self.files[index][1])
         ysize = label.size
         image = torch.from_numpy(image).float().div(255)
 
-        if xsize == (1024, 1024) and image.shape[-1] == 1024:
-            x0 = random.randint(0, 1024 - 256)
-            y0 = random.randint(0, 1024 - 256)
-            image = image[:, x0:x0 + 256, y0:y0 + 256]
-            if ysize == (1024, 1024):
-                label = label[x0:x0 + 256, y0:y0 + 256]
         if random.randint(0, 1) > 0:
             image = torch.flip(image, [1, ])
             # label = np.flip(label, 0)
@@ -52,10 +46,10 @@ class ListDataSet(Dataset):
         if random.randint(0, 1) > 0:
             image = torch.flip(image, [2, ])
             label = label[:, ::-1].copy()
-
-            # label = np.flip(label, 1)
+        # if random.randint(0, 1) > 0:
+        #     image = torch.rot90(image, 1, [1, 2]))
+        #     label = np.rot90(label)
         label = label - 1
-        # label = np.eye(10)[label - 1]
         if self.labelSmooth:
             label = label * 0.8 + 0.1
 

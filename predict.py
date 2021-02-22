@@ -18,6 +18,7 @@ from tensorboardX import SummaryWriter
 from torch.optim import SGD, Adadelta, Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import zipfile
 
 try:
     from nets import LossWrapper
@@ -26,7 +27,7 @@ except:
     sys.path.append(path)
     from nets import LossWrapper
 finally:
-    from nets import IOUMetric, get_eccnet
+    from nets import IOUMetric, get_eccnet, get_attu_net, get_enet, GetMyDeepLabv3Plus, GetMyDeepLab, get_CCNET_Model
     from utils import ListDataSet, readlabel, readTiff
 
 
@@ -58,69 +59,95 @@ def get_gpuid(ngpus=1):
     logging.info("CUDA_VISIBLE_DEVICES: " + res)
     return res
 
-# To save the checkpoint
 
+def net_pred(NET=None):
 
-def save_checkpoint(state, save_path):
-    try:
-        torch.save(state, save_path, _use_new_zipfile_serialization=False)
-    except Exception as e:
-        torch.save(state, save_path)
+    def wapper(x):
+        pred = NET(x)
+        if isinstance(pred, list):
+            pred = pred[0]
+        return pred
+    return wapper
 
 
 def ttabatch2images(img, f, fold=8):
-    sigmoid = torch.nn.Sigmoid()
     img0 = img
-    res0 = sigmoid(f(img0))
+    res0 = F.softmax(f(img0), dim=1)
     img1 = torch.rot90(img0, 1, [2, 3])
-    res1 = torch.rot90(sigmoid(f(img1)), -1, [2, 3])
+    res1 = torch.rot90(F.softmax(f(img1), dim=1), -1, [2, 3])
 
     img2 = torch.flip(img0, [2, ])
-    res2 = torch.flip(sigmoid(f(img2)), [2, ])
+    res2 = torch.flip(F.softmax(f(img2), dim=1), [2, ])
     img3 = torch.flip(img1, [2, ])
-    res3 = torch.rot90(torch.flip(sigmoid(f(img3)), [2, ]), -1, [2, 3])
+    res3 = torch.rot90(torch.flip(F.softmax(f(img3), dim=1), [2, ]), -1, [2, 3])
     if fold == 4:
         return (res0 + res1 + res2 + res3) / 4
     img4 = torch.flip(img0, [3, ])
-    res4 = torch.flip(sigmoid(f(img4)), [3, ])
+    res4 = torch.flip(F.softmax(f(img4), dim=1), [3, ])
     img5 = torch.flip(img1, [3, ])
-    res5 = torch.rot90(torch.flip(sigmoid(f(img5)), [3, ]), -1, [2, 3])
+    res5 = torch.rot90(torch.flip(F.softmax(f(img5), dim=1), [3, ]), -1, [2, 3])
 
     img6 = torch.flip(img2, [3, ])
-    res6 = torch.flip(torch.flip(sigmoid(f(img6)), [3, ]), [2, ])
+    res6 = torch.flip(torch.flip(F.softmax(f(img6), dim=1), [3, ]), [2, ])
     img7 = torch.flip(img3, [3, ])
-    res7 = torch.rot90(torch.flip(torch.flip(sigmoid(f(img7)), [3, ]), [2, ]), -1, [2, 3])
+    res7 = torch.rot90(torch.flip(torch.flip(F.softmax(f(img7), dim=1), [3, ]), [2, ]), -1, [2, 3])
 
     return (res0 + res1 + res2 + res3 + res4 + res5 + res6 + res7) / 8
+
 
 torch.backends.cudnn.enabled = True
 np.set_printoptions(precision=2)
 
-setproctitle.setproctitle('CITY_ECC_eval')
 npgus = 1
 get_gpuid(npgus)
 filelst = []
 train_dir = '/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/data/tc_2021/suichang_round1_test_partA_210120/'
-res_dir = '/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/tmp/tc_res/'
+res_dir = '/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/tmp/result/'
 if os.path.exists(res_dir):
     shutil.rmtree(res_dir)
 os.mkdir(res_dir)
-NET = get_eccnet(gpu_ids=npgus, num_classes=10)
-ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_ECC_21-02-04_6/E_65.ckpt')
-NET.load_state_dict(ckpt)
+# ccnet 0.3463
+# deeplabv3 0.336
+# deeplabv3plus 0.3375
+# eccnet 0.3378
+# attu_net 0.3
 
+ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_tc_attu_net_21-02-09_0/E_85.ckpt')
+setproctitle.setproctitle('CITY_' + ckpt['args'].segname + '_eval')
+if ckpt['args'].segname == 'attu_net':
+    NET = get_attu_net(gpu_ids=1, num_classes=10)
+elif ckpt['args'].segname == 'eccnet':
+    NET = get_eccnet(gpu_ids=1, num_classes=10)
+elif ckpt['args'].segname == 'enet':
+    NET = get_enet(gpu_ids=1, num_classes=10)
+elif ckpt['args'].segname == 'deeplabv3plus':
+    NET = GetMyDeepLabv3Plus(gpu_ids=1, num_classes=10)
+elif ckpt['args'].segname == 'deeplabv3':
+    NET = GetMyDeepLab(gpu_ids=1, num_classes=10)
+elif ckpt['args'].segname == 'ccnet':
+    NET = get_CCNET_Model(gpu_ids=1, num_classes=10)
+
+NET.load_state_dict(ckpt['segnet'])
+zip_name = '/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/tmp/result_' + ckpt['args'].segname + '.zip'
 NET.eval()
 with torch.no_grad():
-    for name in tqdm(os.listdir(train_dir), disable=True):
-        if not name.endswith('.tif'):
-            continue
-        image = readTiff(os.path.join(train_dir, name))
-        image = torch.from_numpy(image).float().div(255)
-        image = torch.unsqueeze(image, 0).cuda()
-        pred = NET(image)
-        if isinstance(pred, list):
-            pred = pred[0]
+    if os.path.exists(zip_name):
+        os.remove(zip_name)
+    with zipfile.ZipFile(zip_name, mode='w') as zipf:
 
-        output_img = torch.squeeze(torch.argmax(F.softmax(pred, dim=1), dim=1)).cpu().numpy() + 1
+        for name in tqdm(os.listdir(train_dir), disable=False):
+            if not name.endswith('.tif'):
+                continue
+            image = readTiff(os.path.join(train_dir, name))
+            image = torch.from_numpy(image).float().div(255)
+            image = torch.unsqueeze(image, 0).cuda()
+            # pred = NET(image)
+            # if isinstance(pred, list):
+            #     pred = pred[0]
 
-        cv2.imwrite(os.path.join(res_dir, name[:-4] + '.png'), output_img)
+            pred = ttabatch2images(image, net_pred(NET), fold=8)
+
+            output_img = torch.squeeze(torch.argmax(pred, dim=1)).cpu().numpy() + 1
+
+            cv2.imwrite(os.path.join(res_dir, name[:-4] + '.png'), output_img)
+            zipf.write(os.path.join(res_dir, name[:-4] + '.png'), name[:-4] + '.png')

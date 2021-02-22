@@ -6,7 +6,7 @@ import shutil
 import sys
 import traceback
 from argparse import ArgumentParser
-from os.path import abspath, basename, dirname
+from os.path import abspath, basename, dirname, join, isdir
 from statistics import mean
 
 import numpy as np
@@ -18,6 +18,7 @@ from torch.utils.data.dataset import random_split
 from tensorboardX import SummaryWriter
 from torch.optim import SGD, Adadelta, Adam
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 from time import time
 try:
@@ -27,7 +28,7 @@ except:
     sys.path.append(path)
     from nets import LossWrapper
 finally:
-    from nets import IOUMetric, get_eccnet
+    from nets import IOUMetric, get_eccnet, get_attu_net, get_enet, GetMyDeepLabv3Plus, GetMyDeepLab, get_CCNET_Model
     from utils import ListDataSet
 
 
@@ -41,9 +42,7 @@ def set_logger(logfile, on_NCloud=False):
         logging.Formatter.converter = beijing
     logger = logging.getLogger()  # 不加名称设置root logger
     logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S')
+    formatter = logging.Formatter('%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
     # 使用FileHandler输出到文件
     fh = logging.FileHandler(logfile, mode='w')
@@ -72,8 +71,7 @@ def get_gpuid(ngpus=1):
     memory_gpu = [int(x.split()[2]) for x in open(tmpfile, 'r').readlines()]
     if os.path.exists(tmpfile):
         os.remove(tmpfile)
-    memory_gpu = sorted(list(zip(memory_gpu, list(range(len(memory_gpu))))),
-                        key=lambda x: x[0])
+    memory_gpu = sorted(list(zip(memory_gpu, list(range(len(memory_gpu))))), key=lambda x: x[0])
     memory_gpu.reverse()
     tmp = ''
     for mem, id in memory_gpu:
@@ -98,6 +96,17 @@ def save_checkpoint(state, save_path):
         torch.save(state, save_path)
 
 
+def include_patterns(*patterns):
+    def _ignore_patterns(pathname, names):
+        ignore = set(name for name in names for pattern in patterns
+                     if not name.endswith(pattern) and not isdir(join(pathname, name)))
+        if '__pycache__' in names:
+            ignore.add('__pycache__')
+        return ignore
+
+    return _ignore_patterns
+
+
 def get_dir(filedir=None, nb_params=0, str=''):
     now = datetime.datetime.now()
     day = now.strftime('%y-%m-%d')
@@ -107,9 +116,78 @@ def get_dir(filedir=None, nb_params=0, str=''):
         if os.path.exists(os.path.join(filedir, tem)):
             continue
         os.mkdir(os.path.join(filedir, tem))
-
+        path = dirname(abspath(__file__))
+        shutil.copytree(path, os.path.join(filedir, tem) + '/py', ignore=include_patterns('.py'))
         return os.path.join(filedir, tem)
     return None
+
+
+def train(NET, train_loader, val_loader, cri, optimizer, scheduler, epochs, writer, args):
+    iou = IOUMetric(10)
+    best_val_miou = 0.1
+    best_val_acc_cls = 0.1
+    for epoch in range(epochs):
+        losses = []
+        metrices = {}
+        metrices['Epoch/epoch'] = epoch
+        st = time()
+        NET.train()
+        batch_idx = 0
+        for img, label in tqdm(train_loader, ncols=80, disable=not args.use_tqdm, desc='train'):
+            pred = NET(img)
+            loss = cri(pred, label.cuda())
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            losses.append(loss.item())
+            if isinstance(pred, list):
+                pred = pred[0]
+
+            iou.add_batch(torch.argmax(F.softmax(pred, dim=1), dim=1).cpu().numpy(), label.numpy())
+            scheduler.step(epoch + batch_idx / train_loader.__len__())
+            batch_idx += 1
+        # print(iou.evaluate())
+        metrices['TRAIN/LOSS'] = mean(losses)
+        metrices['TRAIN/acc'], metrices['TRAIN/acc_cls'], _, metrices['TRAIN/miou'], _ = iou.evaluate()
+        losses = []
+        with torch.no_grad():
+            NET.eval()
+            for img, label in tqdm(val_loader, ncols=80, disable=not args.use_tqdm, desc='val  '):
+                pred = NET(img)
+                loss = cri(pred, label.cuda())
+                losses.append(loss.item())
+                if isinstance(pred, list):
+                    pred = pred[0]
+                iou.add_batch(torch.argmax(F.softmax(pred, dim=1), dim=1).cpu().numpy(), label.numpy())
+        metrices['VAL/acc'], metrices['VAL/acc_cls'], _, metrices['VAL/miou'], _ = iou.evaluate()
+        metrices['VAL/loss'] = mean(losses)
+        metrices['Epoch/time'] = time() - st
+        save_flag = False
+        if best_val_miou < metrices['VAL/miou']:
+            best_val_miou = metrices['VAL/miou']
+            save_flag = True
+
+        # if best_val_acc_cls < metrices['VAL/acc_cls']:
+        #     best_val_acc_cls = metrices['VAL/acc_cls']
+        #     save_flag = True
+        ckpt = {'segnet': NET.state_dict(), 'args': args}
+        if save_flag:
+            save_checkpoint(ckpt, os.path.join(args.log_dir, 'E_{}.ckpt'.format(epoch)))
+        save_checkpoint(ckpt, os.path.join(args.log_dir, 'last.ckpt'))
+        logging.info(' '.join(['{key}: {value:.3f}'.format(key=key, value=value) for key, value in metrices.items()]))
+        if writer is not None:
+            for key, value in zip(metrices.keys(), metrices.values()):
+                writer.add_scalar(key, value, epoch)
+
+
+def print_options(args):
+    message = ''
+    message += '----------------- Options ---------------\n'
+    for k, v in sorted(vars(args).items()):
+        comment = ''
+        message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
+    message += '----------------- End -------------------'
+    logging.info(message)
 
 
 class Criterion(nn.Module):
@@ -127,28 +205,31 @@ class Criterion(nn.Module):
 
 def get_args():
     parser = ArgumentParser(description='CITY_ECC SEGMENTATION PyTorch')
-    parser.add_argument('--ngpus', type=int, default=3, help='GPU数')
-    parser.add_argument('--epochs', type=int, default=1000, help='最大迭代epoch数')
+    parser.add_argument('--ngpus', type=int, default=2, help='GPU数')
+    parser.add_argument('--epochs', type=int, default=100, help='最大迭代epoch数')
     parser.add_argument('--use_tqdm', type=bool, default=True, help='进度条')
     parser.add_argument('--train_dir', type=str, help='data dir',
                         default='/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/data/tc_2021/suichang_round1_train_210120/')
     parser.add_argument('--log_dir', type=str, help='data dir',
                         default='/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs',)
     parser.add_argument('--use_tensorboard', type=bool, default=True)
+    parser.add_argument('--segname', type=str, default='enet', help='分割网络模型',
+                        choices=['attu_net', 'deeplabv3plus', 'deeplabv3', 'enet', 'ccnet', 'eccnet'])
     args = parser.parse_args()
     return args
 
 
 if __name__ == '__main__':
     args = get_args()
-    args.log_dir = get_dir(filedir=args.log_dir, str='CITY_ECC')
+    args.log_dir = get_dir(filedir=args.log_dir, str='CITY_tc_' + args.segname)
     torch.backends.cudnn.enabled = True
     np.set_printoptions(precision=2)
 
-    setproctitle.setproctitle('CITY_ECC')
+    setproctitle.setproctitle('CITY_' + args.segname)
     set_logger(os.path.join(args.log_dir, 'logfile.txt'))
     writer = SummaryWriter(args.log_dir + '/') if args.use_tensorboard else None
     get_gpuid(args.ngpus)
+    print_options(args)
     filelst = []
 
     for name in os.listdir(args.train_dir):
@@ -157,60 +238,32 @@ if __name__ == '__main__':
                 filelst.append((os.path.join(args.train_dir, name), os.path.join(args.train_dir, name[:-4] + '.png')))
     datasets = ListDataSet(filelst)
     train_dataset, val_dataset = random_split(datasets, [datasets.__len__() // 5 * 4, datasets.__len__() - (datasets.__len__() // 5 * 4)])
-    NET = get_eccnet(gpu_ids=args.ngpus, num_classes=10)
+    # NET = get_eccnet(gpu_ids=args.ngpus, num_classes=10)
+    # NET = get_attu_net(gpu_ids=args.ngpus, num_classes=10)
     # ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_ECC_21-02-04_3/E_54.ckpt')
     # NET.load_state_dict(ckpt)
+    if args.segname == 'attu_net':
+        NET = get_attu_net(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'eccnet':
+        NET = get_eccnet(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'enet':
+        NET = get_enet(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'deeplabv3plus':
+        NET = GetMyDeepLabv3Plus(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'deeplabv3':
+        NET = GetMyDeepLab(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'ccnet':
+        NET = get_CCNET_Model(gpu_ids=args.ngpus, num_classes=10)
 
-    train_loader = DataLoader(train_dataset, batch_size=32 * args.ngpus, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=32 * args.ngpus, shuffle=True, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=True, num_workers=4)
 
     cri = Criterion(cri1=LossWrapper('FocalLoss'), cri2=LossWrapper('MultiClassDiceLoss')).cuda()
-    opt = Adadelta(NET.parameters(), weight_decay=1e-5)
+    # optimizer = Adam(NET.parameters(), weight_decay=1e-5)
+    # opt = Adadelta(NET.parameters(), weight_decay=1e-5)
+    optimizer = SGD(NET.parameters(), lr=1e-2, momentum=0.9, weight_decay=5e-4)
+    # optimizer = optim.SGD(model.parameters(), lr=1e-2, momentum=momentum, weight_decay=weight_decay)
+    scheduler = StepLR(optimizer, step_size=30, gamma=0.2)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=3, T_mult=2, eta_min=1e-5, last_epoch=-1)
     # opt = SGD(NET.parameters(), lr=0.01, weight_decay=1e-5, nesterov=True, momentum=0.1)
-    iou = IOUMetric(10)
-    best_val_miou = 0.1
-    best_val_acc_cls = 0.1
-    for epoch in range(args.epochs):
-        losses = []
-        metrices = {}
-        metrices['Epoch/epoch'] = epoch
-        st = time()
-        NET.train()
-        for img, label in tqdm(train_loader, ncols=80, disable=not args.use_tqdm, desc='train'):
-            pred = NET(img)
-            loss = cri(pred, label.cuda())
-            loss.backward()
-            opt.step()
-            opt.zero_grad()
-            losses.append(loss.item())
-            if isinstance(pred, list):
-                pred = pred[0]
-
-            iou.add_batch(torch.argmax(F.softmax(pred, dim=1), dim=1).cpu().numpy(), label.numpy())
-        # print(iou.evaluate())
-        metrices['TRAIN/LOSS'] = mean(losses)
-        metrices['TRAIN/acc'], metrices['TRAIN/acc_cls'], _, metrices['TRAIN/miou'], _ = iou.evaluate()
-        losses = []
-        with torch.no_grad():
-            NET.eval()
-            for img, label in tqdm(val_loader, ncols=80, disable=not args.use_tqdm, desc='val  '):
-                pred = NET(img)
-                loss = cri(pred, label.cuda())
-                losses.append(loss.item())
-                if isinstance(pred, list):
-                    pred = pred[0]
-                iou.add_batch(torch.argmax(F.softmax(pred, dim=1), dim=1).cpu().numpy(), label.numpy())
-        metrices['VAL/acc'], metrices['VAL/acc_cls'], _, metrices['VAL/miou'], _ = iou.evaluate()
-        metrices['VAL/loss'] = mean(losses)
-        metrices['Epoch/time'] = time() - st
-
-        if best_val_miou < metrices['VAL/miou']:
-            best_val_miou = metrices['VAL/miou']
-            save_checkpoint(NET.state_dict(), os.path.join(args.log_dir, 'E_{}.ckpt'.format(epoch)))
-        if best_val_acc_cls < metrices['VAL/acc_cls']:
-            best_val_acc_cls = metrices['VAL/acc_cls']
-            save_checkpoint(NET.state_dict(), os.path.join(args.log_dir, 'E_{}.ckpt'.format(epoch)))
-        save_checkpoint(NET.state_dict(), os.path.join(args.log_dir, 'last.ckpt'))
-        logging.info(' '.join(['{key}: {value:.3f}'.format(key=key, value=value) for key, value in metrices.items()]))
-        for key, value in zip(metrices.keys(), metrices.values()):
-            writer.add_scalar(key, value, epoch)
+    train(NET, train_loader, val_loader, cri, optimizer, scheduler, args.epochs, writer, args)

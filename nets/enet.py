@@ -1,8 +1,6 @@
 import torch.nn as nn
 import torch
 from .ops import init_network
-from .CCNet import RCCAModule
-import torch.nn.functional as F
 
 
 class InitialBlock(nn.Module):
@@ -53,7 +51,7 @@ class InitialBlock(nn.Module):
             bias=bias)
 
         # Extension branch
-        self.ext_branch = nn.MaxPool2d(in_channels, stride=2, padding=1)
+        self.ext_branch = nn.MaxPool2d(3, stride=2, padding=1)
 
         # Initialize batch normalization to be used after concatenation
         self.batch_norm = nn.BatchNorm2d(out_channels)
@@ -276,7 +274,10 @@ class DownsamplingBottleneck(nn.Module):
             activation = nn.PReLU
 
         # Main branch - max pooling followed by feature map (channels) padding
-        self.main_max1 = nn.MaxPool2d(2, stride=2, return_indices=return_indices)
+        self.main_max1 = nn.MaxPool2d(
+            2,
+            stride=2,
+            return_indices=return_indices)
 
         # Extension branch - 2x2 convolution, followed by a regular, dilated or
         # asymmetric convolution, followed by another 1x1 convolution. Number
@@ -419,7 +420,8 @@ class UpsamplingBottleneck(nn.Module):
 
         # 1x1 projection convolution with stride 1
         self.ext_conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, internal_channels, kernel_size=1, bias=bias),
+            nn.Conv2d(
+                in_channels, internal_channels, kernel_size=1, bias=bias),
             nn.BatchNorm2d(internal_channels), activation())
 
         # Transposed convolution
@@ -434,7 +436,8 @@ class UpsamplingBottleneck(nn.Module):
 
         # 1x1 expansion convolution
         self.ext_conv2 = nn.Sequential(
-            nn.Conv2d(internal_channels, out_channels, kernel_size=1, bias=bias),
+            nn.Conv2d(
+                internal_channels, out_channels, kernel_size=1, bias=bias),
             nn.BatchNorm2d(out_channels), activation())
 
         self.ext_regul = nn.Dropout2d(p=dropout_prob)
@@ -462,8 +465,8 @@ class UpsamplingBottleneck(nn.Module):
         return self.out_activation(out)
 
 
-class ECCNet(nn.Module):
-    """Generate the ECCNet model.
+class ENet(nn.Module):
+    """Generate the ENet model.
 
     Keyword arguments:
     - num_classes (int): the number of classes to segment.
@@ -476,11 +479,11 @@ class ECCNet(nn.Module):
 
     """
 
-    def __init__(self, num_classes, encoder_relu=False, decoder_relu=True, recurrence=2):
+    def __init__(self, num_classes, encoder_relu=False, decoder_relu=True):
         super().__init__()
 
         self.initial_block = InitialBlock(4, 32, relu=encoder_relu)
-        self.recurrence = recurrence
+
         # Stage 1 - Encoder
         self.downsample1_0 = DownsamplingBottleneck(
             32,
@@ -488,10 +491,14 @@ class ECCNet(nn.Module):
             return_indices=True,
             dropout_prob=0.01,
             relu=encoder_relu)
-        self.regular1_1 = RegularBottleneck(64, padding=1, dropout_prob=0.01, relu=encoder_relu)
-        self.regular1_2 = RegularBottleneck(64, padding=1, dropout_prob=0.01, relu=encoder_relu)
-        self.regular1_3 = RegularBottleneck(64, padding=1, dropout_prob=0.01, relu=encoder_relu)
-        self.regular1_4 = RegularBottleneck(64, padding=1, dropout_prob=0.01, relu=encoder_relu)
+        self.regular1_1 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.01, relu=encoder_relu)
+        self.regular1_2 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.01, relu=encoder_relu)
+        self.regular1_3 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.01, relu=encoder_relu)
+        self.regular1_4 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.01, relu=encoder_relu)
 
         # Stage 2 - Encoder
         self.downsample2_0 = DownsamplingBottleneck(
@@ -500,8 +507,10 @@ class ECCNet(nn.Module):
             return_indices=True,
             dropout_prob=0.1,
             relu=encoder_relu)
-        self.regular2_1 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated2_2 = RegularBottleneck(128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
+        self.regular2_1 = RegularBottleneck(
+            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated2_2 = RegularBottleneck(
+            128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
         self.asymmetric2_3 = RegularBottleneck(
             128,
             kernel_size=5,
@@ -509,9 +518,12 @@ class ECCNet(nn.Module):
             asymmetric=True,
             dropout_prob=0.1,
             relu=encoder_relu)
-        self.dilated2_4 = RegularBottleneck(128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
-        self.regular2_5 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated2_6 = RegularBottleneck(128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated2_4 = RegularBottleneck(
+            128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
+        self.regular2_5 = RegularBottleneck(
+            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated2_6 = RegularBottleneck(
+            128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
         self.asymmetric2_7 = RegularBottleneck(
             128,
             kernel_size=5,
@@ -519,11 +531,14 @@ class ECCNet(nn.Module):
             padding=2,
             dropout_prob=0.1,
             relu=encoder_relu)
-        self.dilated2_8 = RegularBottleneck(128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated2_8 = RegularBottleneck(
+            128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
 
         # Stage 3 - Encoder
-        self.regular3_0 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated3_1 = RegularBottleneck(128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
+        self.regular3_0 = RegularBottleneck(
+            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated3_1 = RegularBottleneck(
+            128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
         self.asymmetric3_2 = RegularBottleneck(
             128,
             kernel_size=5,
@@ -531,9 +546,12 @@ class ECCNet(nn.Module):
             asymmetric=True,
             dropout_prob=0.1,
             relu=encoder_relu)
-        self.dilated3_3 = RegularBottleneck(128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
-        self.regular3_4 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated3_5 = RegularBottleneck(128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated3_3 = RegularBottleneck(
+            128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
+        self.regular3_4 = RegularBottleneck(
+            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated3_5 = RegularBottleneck(
+            128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
         self.asymmetric3_6 = RegularBottleneck(
             128,
             kernel_size=5,
@@ -541,22 +559,33 @@ class ECCNet(nn.Module):
             padding=2,
             dropout_prob=0.1,
             relu=encoder_relu)
-        self.dilated3_7 = RegularBottleneck(128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
+        self.dilated3_7 = RegularBottleneck(
+            128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
 
         # Stage 4 - Decoder
-        self.head = RCCAModule(128, 64, num_classes)
+        self.upsample4_0 = UpsamplingBottleneck(
+            128, 64, dropout_prob=0.1, relu=decoder_relu)
+        self.regular4_1 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.1, relu=decoder_relu)
+        self.regular4_2 = RegularBottleneck(
+            64, padding=1, dropout_prob=0.1, relu=decoder_relu)
 
-        self.dsn = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=False),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(64, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
-        )
+        # Stage 5 - Decoder
+        self.upsample5_0 = UpsamplingBottleneck(
+            64, 32, dropout_prob=0.1, relu=decoder_relu)
+        self.regular5_1 = RegularBottleneck(
+            32, padding=1, dropout_prob=0.1, relu=decoder_relu)
+        self.transposed_conv = nn.ConvTranspose2d(
+            32,
+            num_classes,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            bias=False)
 
     def forward(self, x):
         # Initial block
         input_size = x.size()
-        h, w = x.size(2), x.size(3)
         x = self.initial_block(x)
 
         # Stage 1 - Encoder
@@ -578,7 +607,6 @@ class ECCNet(nn.Module):
         x = self.dilated2_6(x)
         x = self.asymmetric2_7(x)
         x = self.dilated2_8(x)
-        x_dsn = self.dsn(x)
 
         # Stage 3 - Encoder
         x = self.regular3_0(x)
@@ -591,15 +619,20 @@ class ECCNet(nn.Module):
         x = self.dilated3_7(x)
 
         # Stage 4 - Decoder
-        x = self.head(x, self.recurrence)
-        x = F.interpolate(input=x, size=(h, w), mode='bilinear', align_corners=True)
-        x_dsn = F.interpolate(input=x_dsn, size=(h, w), mode='bilinear', align_corners=True)
+        x = self.upsample4_0(x, max_indices2_0, output_size=stage2_input_size)
+        x = self.regular4_1(x)
+        x = self.regular4_2(x)
 
-        return [x, x_dsn]
+        # Stage 5 - Decoder
+        x = self.upsample5_0(x, max_indices1_0, output_size=stage1_input_size)
+        x = self.regular5_1(x)
+        x = self.transposed_conv(x, output_size=input_size)
+
+        return x
 
 
-def get_eccnet(gpu_ids=1, ema=False, num_classes=1):
-    net = ECCNet(num_classes=num_classes, recurrence=2)
+def get_enet(gpu_ids=1, ema=False, num_classes=10):
+    net = ENet(num_classes=10)
     if ema:
         for param in net.parameters():
             param.detach_()
@@ -607,7 +640,7 @@ def get_eccnet(gpu_ids=1, ema=False, num_classes=1):
 
 
 if __name__ == '__main__':
-    model = ECCNet(num_classes=1)
+    model = ENet(num_classes=1)
     print(model)
     from thop import profile, clever_format
 
