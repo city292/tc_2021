@@ -87,7 +87,7 @@ class Bottleneck(nn.Module):
         self.bn2 = BatchNorm2d(planes)
         self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
         self.bn3 = BatchNorm2d(planes * 4)
-        self.relu = nn.ReLU(inplace=False)
+        self.relu = nn.ReLU(inplace=True)
         self.relu_inplace = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.dilation = dilation
@@ -121,14 +121,14 @@ class RCCAModule(nn.Module):
         super(RCCAModule, self).__init__()
         inter_channels = in_channels // 4
         self.conva = nn.Sequential(nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
-                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=False))
+                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=True))
         self.cca = CrissCrossAttention(inter_channels)
         self.convb = nn.Sequential(nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
-                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=False))
+                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=True))
 
         self.bottleneck = nn.Sequential(
             nn.Conv2d(in_channels + inter_channels, out_channels, kernel_size=3, padding=1, dilation=1, bias=False),
-            BatchNorm2d(out_channels), nn.ReLU(inplace=False),
+            BatchNorm2d(out_channels), nn.ReLU(inplace=True),
             nn.Dropout2d(0.1),
             nn.Conv2d(out_channels, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
         )
@@ -149,16 +149,16 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.conv1 = conv3x3(4, 64, stride=2)
         self.bn1 = BatchNorm2d(64)
-        self.relu1 = nn.ReLU(inplace=False)
+        self.relu1 = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(64, 64)
         self.bn2 = BatchNorm2d(64)
-        self.relu2 = nn.ReLU(inplace=False)
+        self.relu2 = nn.ReLU(inplace=True)
         self.conv3 = conv3x3(64, 128)
         self.bn3 = BatchNorm2d(128)
-        self.relu3 = nn.ReLU(inplace=False)
+        self.relu3 = nn.ReLU(inplace=True)
         # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.relu = nn.ReLU(inplace=False)
+        self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, ceil_mode=True)  # change
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
@@ -169,7 +169,7 @@ class ResNet(nn.Module):
 
         self.dsn = nn.Sequential(
             nn.Conv2d(1024, 512, kernel_size=3, stride=1, padding=1),
-            BatchNorm2d(512), nn.ReLU(inplace=False),
+            BatchNorm2d(512), nn.ReLU(inplace=True),
             nn.Dropout2d(0.1),
             nn.Conv2d(512, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
         )

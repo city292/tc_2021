@@ -50,7 +50,5 @@ class ListDataSet(Dataset):
         #     image = torch.rot90(image, 1, [1, 2]))
         #     label = np.rot90(label)
         label = label - 1
-        if self.labelSmooth:
-            label = label * 0.8 + 0.1
 
         return image, label

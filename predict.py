@@ -110,9 +110,9 @@ os.mkdir(res_dir)
 # deeplabv3 0.336
 # deeplabv3plus 0.3375
 # eccnet 0.3378
-# attu_net 0.3
-
-ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_tc_attu_net_21-02-09_0/E_85.ckpt')
+# attu_net 0.3394
+# ccnet 0.3460
+ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_tc_ccnet_21-02-22_0/E_142.ckpt')
 setproctitle.setproctitle('CITY_' + ckpt['args'].segname + '_eval')
 if ckpt['args'].segname == 'attu_net':
     NET = get_attu_net(gpu_ids=1, num_classes=10)

@@ -28,7 +28,8 @@ except:
     sys.path.append(path)
     from nets import LossWrapper
 finally:
-    from nets import IOUMetric, get_eccnet, get_attu_net, get_enet, GetMyDeepLabv3Plus, GetMyDeepLab, get_CCNET_Model
+    from nets import IOUMetric, get_eccnet, get_attu_net, get_enet, GetMyDeepLabv3Plus, GetMyDeepLab, get_CCNET_Model, get_CCUNET
+    from nets import get_CBAM_U_Net
     from utils import ListDataSet
 
 
@@ -129,7 +130,7 @@ def train(NET, train_loader, val_loader, cri, optimizer, scheduler, epochs, writ
     for epoch in range(epochs):
         losses = []
         metrices = {}
-        metrices['Epoch/epoch'] = epoch
+        # metrices['Epoch/epoch'] = epoch
         st = time()
         NET.train()
         batch_idx = 0
@@ -162,6 +163,7 @@ def train(NET, train_loader, val_loader, cri, optimizer, scheduler, epochs, writ
         metrices['VAL/acc'], metrices['VAL/acc_cls'], _, metrices['VAL/miou'], _ = iou.evaluate()
         metrices['VAL/loss'] = mean(losses)
         metrices['Epoch/time'] = time() - st
+        metrices['lr/lr'] = optimizer.param_groups[-1]['lr']
         save_flag = False
         if best_val_miou < metrices['VAL/miou']:
             best_val_miou = metrices['VAL/miou']
@@ -206,7 +208,7 @@ class Criterion(nn.Module):
 def get_args():
     parser = ArgumentParser(description='CITY_ECC SEGMENTATION PyTorch')
     parser.add_argument('--ngpus', type=int, default=2, help='GPU数')
-    parser.add_argument('--epochs', type=int, default=100, help='最大迭代epoch数')
+    parser.add_argument('--epochs', type=int, default=500, help='最大迭代epoch数')
     parser.add_argument('--use_tqdm', type=bool, default=True, help='进度条')
     parser.add_argument('--train_dir', type=str, help='data dir',
                         default='/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/data/tc_2021/suichang_round1_train_210120/')
@@ -214,7 +216,8 @@ def get_args():
                         default='/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs',)
     parser.add_argument('--use_tensorboard', type=bool, default=True)
     parser.add_argument('--segname', type=str, default='enet', help='分割网络模型',
-                        choices=['attu_net', 'deeplabv3plus', 'deeplabv3', 'enet', 'ccnet', 'eccnet'])
+                        choices=['attu_net', 'deeplabv3plus', 'deeplabv3', 'enet', 'ccnet', 'eccnet', 'ccunet', 'CBAMUNET'])
+    parser.add_argument('--batch_size', type=int, default=16)
     args = parser.parse_args()
     return args
 
@@ -225,7 +228,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.enabled = True
     np.set_printoptions(precision=2)
 
-    setproctitle.setproctitle('CITY_' + args.segname)
+    setproctitle.setproctitle('CITY_' + args.segname + '_' + args.log_dir[-7:])
     set_logger(os.path.join(args.log_dir, 'logfile.txt'))
     writer = SummaryWriter(args.log_dir + '/') if args.use_tensorboard else None
     get_gpuid(args.ngpus)
@@ -254,16 +257,20 @@ if __name__ == '__main__':
         NET = GetMyDeepLab(gpu_ids=args.ngpus, num_classes=10)
     elif args.segname == 'ccnet':
         NET = get_CCNET_Model(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'ccunet':
+        NET = get_CCUNET(gpu_ids=args.ngpus, num_classes=10)
+    elif args.segname == 'CBAMUNET':
+        NET = get_CBAM_U_Net(gpu_ids=args.ngpus, num_classes=10)
 
     train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=True, num_workers=4)
 
-    cri = Criterion(cri1=LossWrapper('FocalLoss'), cri2=LossWrapper('MultiClassDiceLoss')).cuda()
+    cri = Criterion(cri1=LossWrapper('MultiFocalLoss'), cri2=LossWrapper('MultiClassDiceLoss')).cuda()
     # optimizer = Adam(NET.parameters(), weight_decay=1e-5)
     # opt = Adadelta(NET.parameters(), weight_decay=1e-5)
-    optimizer = SGD(NET.parameters(), lr=1e-2, momentum=0.9, weight_decay=5e-4)
+    optimizer = SGD(NET.parameters(), lr=1e-3, momentum=0.9, weight_decay=5e-4)
     # optimizer = optim.SGD(model.parameters(), lr=1e-2, momentum=momentum, weight_decay=weight_decay)
-    scheduler = StepLR(optimizer, step_size=30, gamma=0.2)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=3, T_mult=2, eta_min=1e-5, last_epoch=-1)
+    # scheduler = StepLR(optimizer, step_size=30, gamma=0.2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=3, T_mult=2, eta_min=1e-5, last_epoch=-1)
     # opt = SGD(NET.parameters(), lr=0.01, weight_decay=1e-5, nesterov=True, momentum=0.1)
     train(NET, train_loader, val_loader, cri, optimizer, scheduler, args.epochs, writer, args)

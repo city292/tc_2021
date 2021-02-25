@@ -120,7 +120,8 @@ class ResNet(nn.Module):
                  norm_layer=None):
         super(ResNet, self).__init__()
         if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
+            norm_layer = nn.InstanceNorm2d
+
         self._norm_layer = norm_layer
 
         self.inplanes = 64
