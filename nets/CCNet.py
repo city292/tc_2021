@@ -143,11 +143,41 @@ class RCCAModule(nn.Module):
         return output
 
 
+class MyRCCAModule(nn.Module):
+    def __init__(self, in_channels, out_channels, num_classes):
+        super(MyRCCAModule, self).__init__()
+        inter_channels = in_channels // 4
+        self.conva = nn.Sequential(nn.Conv2d(in_channels, inter_channels, 3, padding=1, bias=False),
+                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=True))
+        self.cca1 = CrissCrossAttention(inter_channels)
+        self.cca2 = CrissCrossAttention(inter_channels)
+        self.convb = nn.Sequential(nn.Conv2d(inter_channels, inter_channels, 3, padding=1, bias=False),
+                                   BatchNorm2d(inter_channels), nn.ReLU(inplace=True))
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(in_channels + inter_channels, out_channels, kernel_size=3, padding=1, dilation=1, bias=False),
+            BatchNorm2d(out_channels), nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(out_channels, num_classes, kernel_size=1, stride=1, padding=0, bias=True)
+        )
+
+    def forward(self, x, recurrence=1):
+        output = self.conva(x)
+        for i in range(recurrence):
+            output = self.cca1(output)
+        for i in range(recurrence):
+            output = self.cca2(output)
+        output = self.convb(output)
+
+        output = self.bottleneck(torch.cat([x, output], 1))
+        return output
+
+
 class ResNet(nn.Module):
-    def __init__(self, block, layers, num_classes, criterion, recurrence):
+    def __init__(self, block, layers, num_classes, criterion, recurrence, img_ch=3, CCModule=RCCAModule):
         self.inplanes = 128
         super(ResNet, self).__init__()
-        self.conv1 = conv3x3(4, 64, stride=2)
+        self.conv1 = conv3x3(img_ch, 64, stride=2)
         self.bn1 = BatchNorm2d(64)
         self.relu1 = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(64, 64)
@@ -165,7 +195,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=1, dilation=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1, dilation=4, multi_grid=(1, 1, 1))
         # self.layer5 = PSPModule(2048, 512)
-        self.head = RCCAModule(2048, 512, num_classes)
+        self.head = CCModule(2048, 512, num_classes)
 
         self.dsn = nn.Sequential(
             nn.Conv2d(1024, 512, kernel_size=3, stride=1, padding=1),
@@ -221,8 +251,16 @@ class ResNet(nn.Module):
             return outs
 
 
-def get_CCNET_Model(gpu_ids=1, ema=False, num_classes=10):
-    net = ResNet(Bottleneck, layers=[2, 2, 2, 2], num_classes=10, criterion=None, recurrence=2)
+def get_CCNET_Model(img_ch=4, gpu_ids=1, ema=False, num_classes=10):
+    net = ResNet(Bottleneck, layers=[2, 2, 2, 2], num_classes=10, criterion=None, recurrence=2, img_ch=img_ch)
+    if ema:
+        for param in net.parameters():
+            param.detach_()
+    return init_network(net, gpu_ids)
+
+
+def get_MyCCNET_Model(gpu_ids=1, ema=False, num_classes=10):
+    net = ResNet(Bottleneck, layers=[2, 2, 2, 2], num_classes=10, criterion=None, recurrence=1, CCModule=MyRCCAModule)
     if ema:
         for param in net.parameters():
             param.detach_()

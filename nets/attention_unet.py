@@ -131,8 +131,8 @@ class Attention_block(nn.Module):
         return x * psi
 
 
-def get_attu_net(gpu_ids=1, ema=False, num_classes=1):
-    net = AttU_Net(img_ch=4, output_ch=10)
+def get_attu_net(img_ch=4, gpu_ids=1, ema=False, num_classes=1):
+    net = AttU_Net(img_ch=img_ch, output_ch=10)
     if ema:
         for param in net.parameters():
             param.detach_()
