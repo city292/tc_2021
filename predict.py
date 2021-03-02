@@ -112,7 +112,10 @@ os.mkdir(res_dir)
 # eccnet 0.3378
 # attu_net 0.3394
 # ccnet 0.3460
-ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_tc_ccnet_21-02-22_0/E_142.ckpt')
+# E_167 0.3578
+# E_184 0.3607
+
+ckpt = torch.load('/media/l/e6aa5997-4a1e-42e4-8782-83e2693751bd/city/logs/CITY_tc_ccnet_21-02-22_0/E_184.ckpt')
 setproctitle.setproctitle('CITY_' + ckpt['args'].segname + '_eval')
 if ckpt['args'].segname == 'attu_net':
     NET = get_attu_net(gpu_ids=1, num_classes=10)
@@ -145,7 +148,7 @@ with torch.no_grad():
             # if isinstance(pred, list):
             #     pred = pred[0]
 
-            pred = ttabatch2images(image, net_pred(NET), fold=8)
+            pred = ttabatch2images(image, net_pred(NET), fold=4)
 
             output_img = torch.squeeze(torch.argmax(pred, dim=1)).cpu().numpy() + 1
 
